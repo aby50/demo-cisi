@@ -1,0 +1,114 @@
+cisi_demo/
+│
+├── app.py                # Flask backend
+├── static/
+│   ├── style.css         # CSS styling
+│   └── script.js         # Frontend logic
+├── templates/
+│   └── index.html        # Search interface
+└── data/                 # CISI dataset
+    ├── cisi.abstracts    # Documents
+    ├── cisi.queries      # Queries
+    └── cisi.rel         # Relevance judgments
+from flask import Flask, render_template, request, jsonify
+from sklearn.feature_extraction.text import TfidfVectorizer
+from rank_bm25 import BM25Okapi
+import os
+
+app = Flask(__name__)
+
+# Load CISI dataset
+def load_data():
+    with open("data/cisi.abstracts") as f:
+        docs = [line.strip() for line in f if ".I" not in line and ".W" not in line]
+    with open("data/cisi.queries") as f:
+        queries = [line.strip() for line in f if ".I" not in line and ".W" not in line]
+    return docs, queries
+
+docs, queries = load_data()
+
+# Initialize models
+tfidf = TfidfVectorizer().fit(docs)
+tfidf_matrix = tfidf.transform(docs)
+bm25 = BM25Okapi([doc.split() for doc in docs])
+
+@app.route("/")
+def home():
+    return render_template("index.html", queries=queries)
+
+@app.route("/search", methods=["POST"])
+def search():
+    query = request.json["query"]
+    model = request.json["model"]
+    
+    if model == "tfidf":
+        query_vec = tfidf.transform([query])
+        scores = (tfidf_matrix * query_vec.T).toarray().flatten()
+    else:  # BM25
+        scores = bm25.get_scores(query.split())
+    
+    results = sorted(zip(scores, docs), reverse=True)[:10]  # Top 10
+    return jsonify({"results": [doc for (score, doc) in results]})
+
+if __name__ == "__main__":
+    app.run(debug=True)
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CISI Dataset Demo</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>CISI Information Retrieval Demo</h1>
+        <div class="search-box">
+            <input type="text" id="query" placeholder="Enter your query...">
+            <select id="model">
+                <option value="tfidf">TF-IDF</option>
+                <option value="bm25">BM25</option>
+            </select>
+            <button onclick="search()">Search</button>
+        </div>
+        <div id="results"></div>
+    </div>
+    <script src="/static/script.js"></script>
+</body>
+</html>body {
+    font-family: Arial, sans-serif;
+    margin: 20px;
+}
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+}
+.search-box {
+    margin: 20px 0;
+}
+#query {
+    width: 300px;
+    padding: 8px;
+}
+#results {
+    margin-top: 20px;
+    border-top: 1px solid #ddd;
+    padding-top: 10px;
+}
+function search() {
+    const query = document.getElementById("query").value;
+    const model = document.getElementById("model").value;
+    
+    fetch("/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, model })
+    })
+    .then(res => res.json())
+    .then(data => {
+        let html = "<h3>Results:</h3><ul>";
+        data.results.forEach(doc => {
+            html += `<li>${doc}</li>`;
+        });
+        html += "</ul>";
+        document.getElementById("results").innerHTML = html;
+    });
+}
